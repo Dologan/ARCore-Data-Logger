@@ -11,6 +11,7 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
 import android.view.View;
@@ -53,7 +54,7 @@ public class MainActivity extends AppCompatActivity {
     private Session mSession;
     private boolean mInstallRequested;
 
-    private Handler mHandler = new Handler();
+    private Handler mHandler = new Handler(Looper.getMainLooper());
     private AtomicBoolean mIsRecording = new AtomicBoolean(false);
     private PowerManager.WakeLock mWakeLock;
 
@@ -119,7 +120,7 @@ public class MainActivity extends AppCompatActivity {
                 ArCoreApk.Availability availability = ArCoreApk.getInstance().checkAvailability(this);
                 if (availability.isTransient()) {
                     // Re-query at 5Hz while compatibility is checked in the background.
-                    new Handler().postDelayed(new Runnable() {
+                    new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
                         @Override
                         public void run() {
                             onResume();
