@@ -1,8 +1,6 @@
 package com.pjinkim.arcore_data_logger;
 
 import android.content.Context;
-import android.content.Intent;
-import android.net.Uri;
 import android.util.Log;
 
 import java.io.BufferedWriter;
@@ -67,9 +65,7 @@ public class FileStreamer {
         Log.i(LOG_TAG, "createFile: File created successfully: " + file.exists());
         Log.i(LOG_TAG, "createFile: File absolute path: " + file.getAbsolutePath());
 
-        Intent scanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
-        scanIntent.setData(Uri.fromFile(file));
-        mContext.sendBroadcast(scanIntent);
+        // ACTION_MEDIA_SCANNER_SCAN_FILE has been a no-op since API 29.
         if ((timeHeader != null) && (timeHeader.length() != 0)) {
             writer.append(timeHeader);
             writer.flush();

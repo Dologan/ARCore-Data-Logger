@@ -1,13 +1,6 @@
 package com.pjinkim.arcore_data_logger;
 
 import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.graphics.Color;
-import android.graphics.ImageFormat;
-import android.graphics.Matrix;
-import android.graphics.Rect;
-import android.graphics.YuvImage;
 import android.media.Image;
 import android.util.Log;
 
@@ -25,9 +18,7 @@ import com.google.ar.sceneform.math.Vector3;
 import com.google.ar.sceneform.ux.ArFragment;
 
 import java.io.BufferedWriter;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.security.KeyException;
@@ -119,6 +110,15 @@ public class ARCoreSession {
 
 
     public void stopSession() {
+
+        // Nothing was ever opened, so there is nothing to flush. Without this guard the point
+        // cloud loop below dereferences a null mFileStreamer whenever startSession was called
+        // with a null stream folder.
+        if (!mIsWritingFile.get() || mFileStreamer == null) {
+            mIsWritingFile.set(false);
+            mIsRecording.set(false);
+            return;
+        }
 
         // save ARCore 3D point cloud only for visualization
         ArrayList<Vector3> pointsPosition = mAccumulatedPointCloud.getPoints();
@@ -257,12 +257,10 @@ public class ARCoreSession {
         IntBuffer bufferPointID = pointCloud.getIds();
         FloatBuffer bufferPoint3D = pointCloud.getPoints();
         mPointCloudNode.visualize(pointCloud);
-        int numberOfFeatures = mAccumulatedPointCloud.getNumberOfFeatures();
         pointCloud.release();
 
         // display and save ARCore information
         try {
-            mNumberOfFeatures = numberOfFeatures;
             mTrackingState = trackingState;
             mTrackingFailureReason = trackingFailureReason;
             mUpdateRate = updateRate;
@@ -273,8 +271,7 @@ public class ARCoreSession {
 
                 // 2) record ARCore 3D point cloud only for visualization
                 Image imageFrame = frame.acquireCameraImage();
-                Bitmap imageBitmap = imageToBitmap(imageFrame);
-                imageFrame.close();
+                CameraImageSampler imageSampler = new CameraImageSampler(imageFrame);
                 for (int i = 0; i < (bufferPoint3D.limit() / 4); i++) {
 
                     // check each point's confidence level
@@ -291,7 +288,7 @@ public class ARCoreSession {
 
                     // get each point RGB color information
                     float[] worldPosition = new float[]{pointX, pointY, pointZ};
-                    Vector3 pointColor = getScreenPixel(worldPosition, imageBitmap);
+                    Vector3 pointColor = getScreenPixel(worldPosition, imageSampler);
                     if (pointColor == null) {
                         continue;
                     }
@@ -299,7 +296,11 @@ public class ARCoreSession {
                     // append each point position and color information
                     mAccumulatedPointCloud.appendPointCloud(pointID, pointX, pointY, pointZ, pointColor.x, pointColor.y, pointColor.z);
                 }
+                // The image is only closed once every point has been sampled from it.
+                imageFrame.close();
             }
+            // Read after the append loop, so the count shown is this frame's, not the last one's.
+            mNumberOfFeatures = mAccumulatedPointCloud.getNumberOfFeatures();
         } catch (IOException | KeyException | NotYetAvailableException e) {
             Log.d(LOG_TAG, "onUpdateFrame: Something is wrong.");
             e.printStackTrace();
@@ -307,56 +308,19 @@ public class ARCoreSession {
     }
 
 
-    private Bitmap imageToBitmap (Image image) {
-        int width = image.getWidth();
-        int height = image.getHeight();
-
-        byte[] nv21;
-        ByteBuffer yBuffer = image.getPlanes()[0].getBuffer();
-        ByteBuffer uBuffer = image.getPlanes()[1].getBuffer();
-        ByteBuffer vBuffer = image.getPlanes()[2].getBuffer();
-
-        int ySize = yBuffer.remaining();
-        int uSize = uBuffer.remaining();
-        int vSize = vBuffer.remaining();
-
-        nv21 = new byte[ySize + uSize + vSize];
-
-        // U and V are swapped
-        yBuffer.get(nv21, 0, ySize);
-        vBuffer.get(nv21, ySize, vSize);
-        uBuffer.get(nv21, ySize + vSize, uSize);
-
-        YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, width, height, null);
-        ByteArrayOutputStream os = new ByteArrayOutputStream();
-        yuvImage.compressToJpeg(new Rect(0, 0, width, height), 100, os);
-        byte[] jpegByteArray = os.toByteArray();
-        Bitmap bitmap = BitmapFactory.decodeByteArray(jpegByteArray, 0, jpegByteArray.length);
-
-        Matrix matrix = new Matrix();
-        matrix.setRotate(90);
-
-        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
-    }
-
-
-    private Vector3 getScreenPixel(float[] worldPosition, Bitmap imageBitmap) throws NotYetAvailableException {
+    private Vector3 getScreenPixel(float[] worldPosition, CameraImageSampler sampler) throws NotYetAvailableException {
 
         // clip to screen space (ViewMatrix * ProjectionMatrix * Anchor Matrix)
-        double[] pos2D = mWorldToScreenTranslator.worldToScreen(imageBitmap.getWidth(), imageBitmap.getHeight(), mArFragment.getArSceneView().getArFrame().getCamera(), worldPosition);
+        double[] pos2D = mWorldToScreenTranslator.worldToScreen(sampler.getWidth(), sampler.getHeight(),
+                mArFragment.getArSceneView().getArFrame().getCamera(), worldPosition);
 
         // check if inside the screen
-        if ((pos2D[0] < 0) || (pos2D[0] > imageBitmap.getWidth()) || (pos2D[1] < 0) || (pos2D[1] > imageBitmap.getHeight())) {
+        int rgb = sampler.sampleRgb((int) pos2D[0], (int) pos2D[1]);
+        if (rgb < 0) {
             return null;
         }
 
-        int pixel = imageBitmap.getPixel((int) pos2D[0], (int) pos2D[1]);
-        int r = Color.red(pixel);
-        int g = Color.green(pixel);
-        int b = Color.blue(pixel);
-        Vector3 pointColor = new Vector3(r, g, b);
-
-        return pointColor;
+        return new Vector3((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
     }
 
 
